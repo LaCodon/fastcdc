@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 )
 
 const (
 	defaultMinSize    int = 8 * 1024   // 8KB
 	defaultNormalSize     = 64 * 1024  // 64KB
 	defaultMaxSize        = 128 * 1024 // 128KB
+	defaultMaskS          = (1 << 18) - 1
+	defaultMaskL          = (1 << 14) - 1
 )
 
 type Chunk struct {
@@ -74,8 +77,8 @@ func New(
 		minSize:    defaultMinSize,
 		normalSize: defaultNormalSize,
 		maxSize:    defaultMaxSize,
-		maskS:      (1 << 18) - 1,
-		maskL:      (1 << 14) - 1,
+		maskS:      defaultMaskS,
+		maskL:      defaultMaskL,
 
 		lastOffset: 0,
 		lastSize:   0,
@@ -91,12 +94,35 @@ func New(
 }
 
 func (f *FastCDC) NextChunk() (Chunk, error) {
+	return f.nextChunk()
+}
+
+func (f *FastCDC) Chunks() iter.Seq2[Chunk, error] {
+	return func(yield func(Chunk, error) bool) {
+		for {
+			chunk, err := f.nextChunk()
+			switch {
+			case errors.Is(err, io.EOF):
+				return
+			case err != nil:
+				yield(Chunk{}, err)
+				return
+			}
+
+			if !yield(chunk, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (f *FastCDC) nextChunk() (Chunk, error) {
 	buf, err := f.nextWindow()
 	switch {
 	case errors.Is(err, io.EOF):
 		return Chunk{}, err
 	case err != nil:
-		return Chunk{}, fmt.Errorf("next window: %w", err)
+		return Chunk{}, fmt.Errorf("fill buffer: %w", err)
 	}
 
 	cutPoint := f.nextCutPoint(buf)
